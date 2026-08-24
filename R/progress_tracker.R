@@ -25,6 +25,9 @@
 progress_tracker <- function(analytic, style, showCheckPoints, trackers, numerator_construct = NA, denominator_construct = NA,
                              construct_tracker_name = NA, construct_units = NA) {
   
+  ##new comment and variable just to test branch stuff from migration
+  test_item_for_migratgion <- 2
+  
   master_list <- list()
   
   addProgressTracker <- function(master_list, name, tasks, statuses, done_values = "DONE", style = NA, units = NA) {
