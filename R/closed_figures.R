@@ -271,8 +271,6 @@ closed_consort_diagram_wb_publication <- function(analytic){
 #' adjudicated_physician_withdrawn, df_surg_start_date, surgery_or_healed_type, surgery_or_healed_days,
 #' crossover, treatment_arm
 #' @param outcome_day day at which the primary outcome status is assessed, defaults to 365
-#' @param arm_a_str label for the Group A treatment arm, defaults to "Group A"
-#' @param arm_b_str label for the Group B treatment arm, defaults to "Group B"
 #'
 #' @return An HTML string containing an image tag with the base64-encoded consort diagram in PNG format.
 #' @export
@@ -280,9 +278,9 @@ closed_consort_diagram_wb_publication <- function(analytic){
 #' @examples
 #' closed_consort_diagram_nsaid_publication("Replace with Analytic Tibble")
 #'
-closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, arm_a_str="Group A", arm_b_str="Group B"){
+closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365){
 
-  confirm_stability_of_related_visual('consort_diagram_nsaid_publication', '28b37a77576262fd3ebe308788574a30')
+  confirm_stability_of_related_visual('consort_diagram_nsaid_publication', '3015ae6abfb00e915281b11b16abc1a6')
 
   analytic <- if_needed_generate_example_data(
     analytic,
@@ -291,13 +289,21 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
                            "constraint_other", "nonparticipation_other_study_coenrolled", "nonparticipation_other_reason",
                            "randomized", "adjudicated_inappropriate_enrollment", "adjudicated_late_ineligible",
                            "adjudicated_late_refusal", "adjudicated_physician_withdrawn", "df_surg_start_date",
-                           "surgery_or_healed_type", "surgery_or_healed_days", "crossover", "treatment_arm"),
+                           "surgery_or_healed_type", "surgery_or_healed_days", "crossover", "adherent", "treatment_arm",
+                           "primary_entry_day",
+                           "dead", "withdrawn_consent", "not_completed_reason",
+                           "bpi_severity_score_3mo", "bpi_interference_score_3mo",
+                           "opioid_days_baseline", "opioid_days_3mo", "opioid_days_6mo", "opioid_days_12mo"),
     example_types = c("Boolean", "Boolean", "Category-NS", "Boolean", "Boolean",
                       "Boolean", "Boolean", "Boolean", "Boolean",
                       "Boolean", "Boolean", "Boolean",
                       "Boolean", "Boolean", "Boolean",
                       "Boolean", "Boolean", "Date",
-                      "NamedCategory['check' 'favorable_event' 'unfavorable_event']", "Number-U365", "Boolean", "TreatmentArm"))
+                      "NamedCategory['check' 'favorable_event' 'unfavorable_event']", "Number-U365", "Boolean", "Boolean", "TreatmentArm",
+                      "Number",
+                      "Boolean", "Boolean", "NamedCategory['Unreachable' 'Other']",
+                      "Number", "Number",
+                      "Number", "Number", "Number", "Number"))
 
   df <- analytic %>%
     select(study_id, screened, eligible, ineligibility_reasons, refused, not_consented, consented,
@@ -305,7 +311,11 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
            nonparticipation_other_study_coenrolled, nonparticipation_other_reason,
            randomized, adjudicated_inappropriate_enrollment, adjudicated_late_ineligible,
            adjudicated_late_refusal, adjudicated_physician_withdrawn, df_surg_start_date,
-           surgery_or_healed_type, surgery_or_healed_days, crossover, treatment_arm) %>%
+           surgery_or_healed_type, surgery_or_healed_days, crossover, any_of("adherent"), treatment_arm,
+           primary_entry_day,
+           dead, withdrawn_consent, not_completed_reason,
+           bpi_severity_score_3mo, bpi_interference_score_3mo,
+           opioid_days_baseline, opioid_days_3mo, opioid_days_6mo, opioid_days_12mo) %>%
     filter(screened)
 
   ir_count <- df %>%
@@ -398,9 +408,52 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
                            (itt_df$surgery_or_healed_type %in% 'check' & full_follow_up))
     adjudicated_healed <- sum(itt_df$surgery_or_healed_type %in% 'favorable_event')
     unfavorable_event <- sum(itt_df$surgery_or_healed_type %in% 'unfavorable_event')
-    non_adherent <- sum(itt_df$crossover, na.rm = TRUE)
+    if ("adherent" %in% names(itt_df)) {
+      pp_n <- sum(itt_df$adherent %in% TRUE)
+      non_adherent <- itt - pp_n
+    } else {
+      non_adherent <- sum(itt_df$crossover, na.rm = TRUE)
+    }
+    crossover_n <- sum(itt_df$crossover %in% TRUE)
+
+    # Amended SAP section 3 elements, per arm. Risk-set entry and person-time
+    # describe the primary analysis, so they run on the intention-to-treat set;
+    # the day-180/365 statuses and the dispositions also run on the arm's
+    # intention-to-treat set: per the study PI (8/28), participants branched out
+    # in the adjudication-exclusions box must not re-enter downstream boxes.
+    # Days count from Time Zero; the SAP phrases the status days as
+    # following discharge, recorded in SAP_Issues_and_Questions.md.
+    # Participant-specific primary risk entry, revised SAP; missing entry falls
+    # back to day 90. An event before entry never enters the risk set.
+    entry_num <- suppressWarnings(as.numeric(itt_df$primary_entry_day))
+    entry_num <- ifelse(is.na(entry_num), 90, entry_num)
+    entry_boundary <- entry_num - 1
+    itt_event <- itt_df$surgery_or_healed_type %in% 'unfavorable_event'
+    in_risk <- !is.na(surgery_or_healed_days_num) & surgery_or_healed_days_num > entry_boundary & !(itt_event & surgery_or_healed_days_num < entry_num)
+    risk_set_n <- sum(in_risk)
+    person_days <- sum(pmax(0, pmin(surgery_or_healed_days_num[in_risk], 365) - entry_boundary[in_risk]), na.rm = TRUE)
+
+    status_at <- function(d) {
+      event_by <- itt_df$surgery_or_healed_type %in% 'unfavorable_event' & !is.na(surgery_or_healed_days_num) & surgery_or_healed_days_num <= d
+      free_through <- !event_by & !is.na(surgery_or_healed_days_num) & surgery_or_healed_days_num >= d
+      c(event = sum(event_by), free = sum(free_through),
+        unknown = nrow(itt_df) - sum(event_by) - sum(free_through))
+    }
 
     list(
+      s180 = status_at(180),
+      s365 = status_at(365),
+      risk_set_n = risk_set_n,
+      person_days = person_days,
+      deaths_n = sum(itt_df$dead %in% TRUE),
+      withdrew_n = sum(itt_df$withdrawn_consent %in% TRUE),
+      ltfu_n = sum(itt_df$not_completed_reason %in% 'Unreachable'),
+      bpi_sev_n = sum(!is.na(suppressWarnings(as.numeric(itt_df$bpi_severity_score_3mo)))),
+      bpi_int_n = sum(!is.na(suppressWarnings(as.numeric(itt_df$bpi_interference_score_3mo)))),
+      opioid_n = sum(!is.na(suppressWarnings(as.numeric(itt_df$opioid_days_baseline))) |
+                       !is.na(suppressWarnings(as.numeric(itt_df$opioid_days_3mo))) |
+                       !is.na(suppressWarnings(as.numeric(itt_df$opioid_days_6mo))) |
+                       !is.na(suppressWarnings(as.numeric(itt_df$opioid_days_12mo)))),
       assigned = assigned,
       inappropriately_enrolled = inappropriately_enrolled,
       late_ineligible = late_ineligible,
@@ -413,12 +466,22 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
       unknown_outcome = itt - known_outcome - unfavorable_event,
       adjudicated_healed = adjudicated_healed,
       per_protocol = itt - non_adherent,
-      non_adherent = non_adherent
+      non_adherent = non_adherent,
+      crossover_n = crossover_n
     )
   }
 
-  a <- arm_counts(rand_df %>% filter(treatment_arm == 'Group A'))
-  b <- arm_counts(rand_df %>% filter(treatment_arm == 'Group B'))
+  # The two arm labels are detected from the treatment_arm column (sorted);
+  # anything but exactly two non-missing levels stops loudly instead of
+  # drawing a diagram of zeros.
+  arms <- sort(unique(stats::na.omit(rand_df$treatment_arm)))
+  if (length(arms) != 2) {
+    stop(sprintf("expected exactly two treatment_arm levels, found %d (%s)",
+                 length(arms), paste(arms, collapse = ", ")))
+  }
+
+  a <- arm_counts(rand_df %>% filter(treatment_arm == arms[1]))
+  b <- arm_counts(rand_df %>% filter(treatment_arm == arms[2]))
 
   show_no_df <- (a$no_definitive_fixation + b$no_definitive_fixation) > 0
 
@@ -427,7 +490,7 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
                         paste0('<TR><TD ALIGN="LEFT">&#8203;    ', arm$no_definitive_fixation, ' Did not complete definitive fixation</TD></TR>'),
                         '')
     paste0('
-      assigned', suffix, ' [style="filled", fillcolor="white", color="black", pos="', x, ',-1.5!", shape = box, width=2.4, height=.5, labeljust=l,
+      assigned', suffix, ' [style="rounded,filled", fillcolor="#DDE9F5", color="#2E5F8A", penwidth=1.5, pos="', x, ',-1.5!", shape = box, width=2.4, height=.5, labeljust=l,
         label = <
           <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
             <TR><TD ALIGN="LEFT">', arm$assigned, ' Were assigned to receive ', arm_str, '</TD></TR>
@@ -443,7 +506,7 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
           </TABLE>
         >];
 
-      itt', suffix, ' [style="filled", fillcolor="white", color="black", pos="', x, ',-3.4!", shape = box, width=2.4, height=.5, labeljust=l,
+      itt', suffix, ' [style="rounded,filled", fillcolor="#DDE9F5", color="#2E5F8A", penwidth=1.5, pos="', x, ',-3.4!", shape = box, width=2.4, height=.5, labeljust=l,
         label = <
           <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
             <TR><TD ALIGN="LEFT">', arm$itt, ' Were included in the intention-to-treat</TD></TR>
@@ -451,7 +514,7 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
           </TABLE>
         >];
 
-      outcome', suffix, ' [style="filled", fillcolor="white", color="black", pos="', x, ',-5.3!", shape = box, width=2.4, height=.5, labeljust=l,
+      outcome', suffix, ' [style="rounded,filled", fillcolor="#E3F1E7", color="#2E7D4F", penwidth=1.5, pos="', x, ',-5.3!", shape = box, width=2.4, height=.5, labeljust=l,
         label = <
           <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
             <TR><TD ALIGN="LEFT">', arm$known_outcome, ' Had ', outcome_day, ' days of follow-up without</TD></TR>
@@ -466,13 +529,46 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
           </TABLE>
         >];
 
-      pp', suffix, ' [style="filled", fillcolor="white", color="black", pos="', x, ',-7.5!", shape = box, width=2.4, height=.5, labeljust=l,
+      pp', suffix, ' [style="rounded,filled", fillcolor="#E3F1E7", color="#2E7D4F", penwidth=1.5, pos="', x, ',-7.5!", shape = box, width=2.4, height=.5, labeljust=l,
         label = <
           <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
             <TR><TD ALIGN="LEFT">', arm$per_protocol, ' Were included in the per-protocol</TD></TR>
             <TR><TD ALIGN="LEFT">analysis</TD></TR>
             <TR><TD ALIGN="LEFT">', arm$non_adherent, ' Were excluded from the per-protocol</TD></TR>
             <TR><TD ALIGN="LEFT">analysis due to non-adherence</TD></TR>
+            <TR><TD ALIGN="LEFT">', arm$crossover_n, ' Met the opposite arm&#39;s adherence</TD></TR>
+            <TR><TD ALIGN="LEFT">criteria (crossover, revised definition)</TD></TR>
+          </TABLE>
+        >];
+
+      sap1', suffix, ' [style="rounded,filled", fillcolor="#FAF3DF", color="#B08A2E", penwidth=1.2, pos="', x, ',-10.1!", shape = box, width=2.4, height=.5, labeljust=l,
+        label = <
+          <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
+            <TR><TD ALIGN="LEFT">Primary analysis accounting</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$risk_set_n, ' Entered the primary risk set</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', format(arm$person_days, big.mark = ","), ' Primary likelihood person-days</TD></TR>
+            <TR><TD ALIGN="LEFT">Status at day 180:</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$s180['event'], ' Surgery to promote union</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$s180['free'], ' Known event-free</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$s180['unknown'], ' Status unknown</TD></TR>
+            <TR><TD ALIGN="LEFT">Status at day 365:</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$s365['event'], ' Surgery to promote union</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$s365['free'], ' Known event-free</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$s365['unknown'], ' Status unknown</TD></TR>
+          </TABLE>
+        >];
+
+      sap2', suffix, ' [style="rounded,filled", fillcolor="#FAF3DF", color="#B08A2E", penwidth=1.2, pos="', x, ',-12.7!", shape = box, width=2.4, height=.5, labeljust=l,
+        label = <
+          <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
+            <TR><TD ALIGN="LEFT">Dispositions (intention-to-treat)</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$deaths_n, ' Died</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$withdrew_n, ' Withdrew consent</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$ltfu_n, ' Lost to follow-up</TD></TR>
+            <TR><TD ALIGN="LEFT">Included in secondary analyses:</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$bpi_sev_n, ' Day-90 BPI pain intensity</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$bpi_int_n, ' Day-90 BPI pain interference</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', arm$opioid_n, ' Reported opioid use</TD></TR>
           </TABLE>
         >];
     ')
@@ -480,12 +576,14 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
 
   consort_diagram <- grViz(paste0('
     digraph g {
-      graph [layout=fdp, overlap = true, fontsize=1, splines=polyline]
+      graph [layout=fdp, overlap = true, fontsize=1, splines=polyline, bgcolor="white"]
+      node [fontname="Helvetica", fontsize=12, margin="0.14,0.08"]
+      edge [color="#5B6B7C", penwidth=1.1, arrowsize=0.7]
 
-      title [style="filled", fillcolor="white", color="black", pos="2,7.2!", shape = box, width=2.4, height=.5,
+      title [style="rounded,filled", fillcolor="#DDE9F5", color="#2E5F8A", penwidth=1.5, pos="2,7.2!", shape = box, width=2.4, height=.5,
         label = "', screened, ' Patients were assessed for eligibility"];
 
-      box1 [style="filled", fillcolor="white", color="black", pos="5.4,3.8!", shape = box, width=2.4, height=.5,
+      box1 [style="rounded,filled", fillcolor="#EEF1F5", color="#8A93A0", penwidth=1.2, pos="5.4,3.8!", shape = box, width=2.4, height=.5,
       labeljust=l,
       label = <
         <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
@@ -507,11 +605,11 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
         </TABLE>
       >];
 
-      title2 [style="filled", fillcolor="white", color="black", pos="2,0.4!", shape = box, width=2.4, height=.5,
+      title2 [style="rounded,filled", fillcolor="#DDE9F5", color="#2E5F8A", penwidth=1.5, pos="2,0.4!", shape = box, width=2.4, height=.5,
         label = "', randomized, ' Underwent randomization"];
     ',
-    arm_column(a, arm_a_str, '-0.85', '_a'),
-    arm_column(b, arm_b_str, '4.85', '_b'),
+    arm_column(a, arms[1], '-0.85', '_a'),
+    arm_column(b, arms[2], '4.85', '_b'),
     '
       midpoint [style=invis, pos="2,3.8!", width=0, height=0, fixedsize=true]
 
@@ -527,6 +625,10 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
       assigned_b -> itt_b
       itt_b -> outcome_b
       outcome_b -> pp_b
+      pp_a -> sap1_a [style=dashed, arrowhead=none]
+      sap1_a -> sap2_a [style=dashed, arrowhead=none]
+      pp_b -> sap1_b [style=dashed, arrowhead=none]
+      sap1_b -> sap2_b [style=dashed, arrowhead=none]
     }
   '))
   svg_content <- DiagrammeRsvg::export_svg(consort_diagram)
@@ -538,4 +640,261 @@ closed_consort_diagram_nsaid_publication <- function(analytic, outcome_day=365, 
   img_tag <- sprintf('<img src="data:image/png;base64,%s" alt="Consort Diagram" style="max-width: 100%%; width: 1200px;">', image_data)
   file.remove(c(temp_svg_path, temp_png_path))
   return(img_tag)
+}
+
+
+#' Posterior figure of the risk difference behind a noninferiority table
+#'
+#' @description
+#' Renders the exact risk-difference posterior behind a return_fit = TRUE result of
+#' closed_survival_analysis_bayes_poisson: the same draws as the table it accompanies,
+#' no additional fit. Density over the risk-difference draws with the median, the 95%
+#' credible bounds, the zero line, and the noninferiority margin with the region past
+#' it shaded, the margin read from the fit's settings. The caption belongs to the
+#' calling report via VisualizationTools::figure().
+#'
+#' @param survival_result the list returned by closed_survival_analysis_bayes_poisson
+#' with return_fit = TRUE
+#'
+#' @return An HTML img tag with the figure embedded as a data URI.
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' closed_risk_difference_posterior_figure(survival_result)
+#' }
+closed_risk_difference_posterior_figure <- function(survival_result) {
+  rd     <- 100 * survival_result$posterior$risk_difference
+  rd_med <- median(rd)
+  rd_lo  <- unname(quantile(rd, 0.025))
+  rd_hi  <- unname(quantile(rd, 0.975))
+  margin_pct <- 100 * survival_result$settings$ni_margin
+  p_fig <- ggplot2::ggplot(data.frame(rd = rd), ggplot2::aes(x = rd)) +
+    ggplot2::annotate("rect", xmin = margin_pct, xmax = Inf, ymin = -Inf, ymax = Inf,
+                      fill = "#D62828", alpha = 0.08) +
+    ggplot2::geom_density(fill = "#DDE9F5", color = "#17365D", linewidth = 0.9, adjust = 1.2) +
+    ggplot2::geom_vline(xintercept = 0, color = "#8A93A0", linewidth = 0.4) +
+    ggplot2::geom_vline(xintercept = c(rd_lo, rd_hi), color = "#2E5F8A", linewidth = 0.4) +
+    ggplot2::geom_vline(xintercept = rd_med, color = "#17365D", linewidth = 0.8) +
+    ggplot2::geom_vline(xintercept = margin_pct, color = "#D62828", linewidth = 0.9) +
+    ggplot2::annotate("text", x = margin_pct, y = Inf,
+                      label = sprintf("+%.0f point noninferiority margin", margin_pct),
+                      hjust = 1.05, vjust = 2, color = "#D62828", size = 3.4, fontface = "bold") +
+    ggplot2::labs(x = "Absolute risk difference, treatment minus control (percentage points)", y = NULL,
+                  subtitle = sprintf("Median %+.1f  |  95%% credible interval %+.1f to %+.1f  |  97.5th percentile %+.1f",
+                                     rd_med, rd_lo, rd_hi, rd_hi)) +
+    ggplot2::scale_y_continuous(expand = ggplot2::expansion(mult = c(0, 0.05))) +
+    ggplot2::theme_minimal(base_family = "Helvetica", base_size = 12) +
+    ggplot2::theme(axis.text.y = ggplot2::element_blank(),
+                   panel.grid.minor = ggplot2::element_blank(),
+                   panel.grid.major.y = ggplot2::element_blank(),
+                   plot.subtitle = ggplot2::element_text(color = "#17365D", face = "bold", size = 10))
+  fig_path <- tempfile(fileext = ".png")
+  ggplot2::ggsave(fig_path, p_fig, width = 8.5, height = 3.4, dpi = 150, bg = "white")
+  img_tag <- sprintf('<img src="data:image/png;base64,%s" style="max-width:100%%" alt="Posterior distribution of the risk difference"/>',
+                     base64enc::base64encode(fig_path))
+  file.remove(fig_path)
+  return(img_tag)
+}
+
+
+#' Summary forest of noninferiority analyses
+#'
+#' @description
+#' Forest figure of the median and 95% credible interval of the risk-difference
+#' posterior for a set of noninferiority fits. Each entry carries a
+#' return_fit = TRUE result of closed_survival_analysis_bayes_poisson, so the
+#' forest is built from the same fits as the tables it summarizes; no additional
+#' model runs. Points are posterior medians and lines are 95% credible
+#' intervals; a vertical line marks no difference, and, only when show_margin
+#' is TRUE, a second line marks the noninferiority margin read from the first
+#' entry's settings. Per the 8/30 statistician direction, the margin belongs
+#' only to the primary-and-supportive figure (manuscript Figure 2); subgroup
+#' and secondary-outcome forests show the zero line alone, and no
+#' per-analysis noninferiority verdict is displayed. The caption belongs to
+#' the calling report via VisualizationTools::figure().
+#'
+#' @param analyses list of entries, each a list with number (the analysis's table
+#' number), label (its display name), and result (its return_fit = TRUE result of
+#' closed_survival_analysis_bayes_poisson)
+#' @param show_margin when TRUE (the default), draws the noninferiority-margin
+#' reference line and shades the region beyond it; when FALSE only the
+#' no-difference line is drawn
+#'
+#' @return An HTML img tag with the figure embedded as a data URI, or invisible NULL
+#' when analyses is empty.
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' closed_noninferiority_forest(list(list(number = "8.3", label = "Primary Analysis", result = survival_result)))
+#' }
+closed_noninferiority_forest <- function(analyses, show_margin = TRUE) {
+  if (length(analyses) == 0) {
+    return(invisible(NULL))
+  }
+  fr <- do.call(rbind, lapply(analyses, function(a) {
+    rd <- 100 * a$result$posterior$risk_difference
+    data.frame(number = a$number, label = a$label,
+               med = median(rd),
+               lo  = unname(quantile(rd, 0.025)),
+               hi  = unname(quantile(rd, 0.975)))
+  }))
+  margin_pct <- 100 * analyses[[1]]$result$settings$ni_margin
+  fr$axis_label <- sprintf("%s   (%s)", fr$label, fr$number)
+  fr$axis_label <- factor(fr$axis_label, levels = rev(fr$axis_label))
+  p_forest <- ggplot2::ggplot(fr, ggplot2::aes(x = med, y = axis_label))
+  if (show_margin) {
+    p_forest <- p_forest +
+      ggplot2::annotate("rect", xmin = margin_pct, xmax = Inf, ymin = -Inf, ymax = Inf,
+                        fill = "#D62828", alpha = 0.08) +
+      ggplot2::geom_vline(xintercept = margin_pct, color = "#D62828", linewidth = 0.9)
+  }
+  p_forest <- p_forest +
+    ggplot2::geom_vline(xintercept = 0, color = "#8A93A0", linewidth = 0.4) +
+    ggplot2::geom_segment(ggplot2::aes(x = lo, xend = hi, yend = axis_label),
+                          color = "#17365D", linewidth = 1.1) +
+    ggplot2::geom_point(color = "#17365D", size = 2.4) +
+    ggplot2::labs(x = "Absolute risk difference, treatment minus control (percentage points)", y = NULL) +
+    ggplot2::theme_minimal(base_family = "Helvetica", base_size = 12) +
+    ggplot2::theme(panel.grid.minor = ggplot2::element_blank(),
+                   legend.position = "none",
+                   axis.text.y = ggplot2::element_text(color = "#17365D"))
+  fig_path <- tempfile(fileext = ".png")
+  ggplot2::ggsave(fig_path, p_forest, width = 9.5, height = 1.4 + 0.34 * nrow(fr),
+                  dpi = 150, bg = "white", limitsize = FALSE)
+  img_tag <- sprintf('<img src="data:image/png;base64,%s" style="max-width:100%%" alt="Forest plot of noninferiority analyses"/>',
+                     base64enc::base64encode(fig_path))
+  file.remove(fig_path)
+  return(img_tag)
+}
+
+
+#' Forest of secondary-outcome mean differences
+#'
+#' @description
+#' Forest figure of the median and 95% credible interval of the between-group
+#' mean-difference posterior for a set of Gaussian secondary-outcome fits
+#' (manuscript Figure 3). Each entry carries a return_fit = TRUE result of
+#' closed_bpi_day90_gaussian, so the forest is built from the same fits as the
+#' tables it summarizes; no additional model runs. A single vertical line marks
+#' no difference; no noninferiority margin applies on this scale, and negative
+#' values favor the treatment arm because higher scores are worse. The caption
+#' belongs to the calling report via VisualizationTools::figure().
+#'
+#' @param analyses list of entries, each a list with number (the analysis's table
+#' number), label (its display name), and result (its return_fit = TRUE result of
+#' closed_bpi_day90_gaussian)
+#'
+#' @return An HTML img tag with the figure embedded as a data URI, or invisible NULL
+#' when analyses is empty.
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' closed_mean_difference_forest(list(list(number = "9.1a", label = "BPI Pain Intensity, Day 90", result = bpi_result)))
+#' }
+closed_mean_difference_forest <- function(analyses) {
+  if (length(analyses) == 0) {
+    return(invisible(NULL))
+  }
+  fr <- do.call(rbind, lapply(analyses, function(a) {
+    md <- a$result$posterior$mean_difference
+    data.frame(number = a$number, label = a$label,
+               med = median(md),
+               lo  = unname(quantile(md, 0.025)),
+               hi  = unname(quantile(md, 0.975)))
+  }))
+  fr$axis_label <- sprintf("%s   (%s)", fr$label, fr$number)
+  fr$axis_label <- factor(fr$axis_label, levels = rev(fr$axis_label))
+  p_forest <- ggplot2::ggplot(fr, ggplot2::aes(x = med, y = axis_label)) +
+    ggplot2::geom_vline(xintercept = 0, color = "#8A93A0", linewidth = 0.4) +
+    ggplot2::geom_segment(ggplot2::aes(x = lo, xend = hi, yend = axis_label),
+                          color = "#17365D", linewidth = 1.1) +
+    ggplot2::geom_point(color = "#17365D", size = 2.4) +
+    ggplot2::labs(x = "Mean difference, treatment minus control (scale points)", y = NULL) +
+    ggplot2::theme_minimal(base_family = "Helvetica", base_size = 12) +
+    ggplot2::theme(panel.grid.minor = ggplot2::element_blank(),
+                   legend.position = "none",
+                   axis.text.y = ggplot2::element_text(color = "#17365D"))
+  fig_path <- tempfile(fileext = ".png")
+  ggplot2::ggsave(fig_path, p_forest, width = 9.5, height = 1.4 + 0.5 * nrow(fr),
+                  dpi = 150, bg = "white", limitsize = FALSE)
+  img_tag <- sprintf('<img src="data:image/png;base64,%s" style="max-width:100%%" alt="Forest plot of secondary-outcome mean differences"/>',
+                     base64enc::base64encode(fig_path))
+  file.remove(fig_path)
+  return(img_tag)
+}
+
+
+#' Participant Trajectory Figure by Treatment Arm
+#'
+#' @description
+#' Closed version of trajectory_figure: participant values by visit coloured by treatment arm
+#' and labelled with the assignment mode.
+#'
+#' @inheritParams trajectory_figure
+#' @inheritParams closed_participant_risk_analysis
+#'
+#' @return An HTML img tag with the figure embedded as a data URI.
+#' @export
+#'
+#' @examples
+#' closed_trajectory_figure("Replace with Analytic Tibble", blinded = TRUE)
+closed_trajectory_figure <- function(analytic, readings_construct = "durometer_readings_set_1",
+                                     fields = c("set", "event", "position", "injection", "reading"), value_field = "reading",
+                                     score_family = NULL, score_families = default_score_families(),
+                                     promis_construct = "promis_data", blinded = FALSE, assignment_map = NULL,
+                                     seed = 20260922, control_arm = "Group A") {
+  analytic <- if_needed_generate_example_data(
+    analytic, example_constructs = c("enrolled", readings_construct, unlist(score_families, use.names = FALSE), promis_construct),
+    example_types = c("Boolean", measurement_example_type(fields, value_field), rep("Number", length(unlist(score_families))),
+                      if (!is.null(promis_construct)) promis_data_example_type))
+  confirm_stability_of_related_visual('trajectory_figure', 'b4af05d09f6cb925d48d06bdf32c9cc1')
+  assignment <- resolve_treatment_assignment(analytic, blinded, assignment_map, seed, control_arm)
+  td <- trajectory_data(analytic, readings_construct, fields, value_field, score_family, score_families, promis_construct)
+  d <- td$data %>% inner_join(assignment$map, by = "study_id")
+  trajectory_plot(d, td$ylab, assignment_caption(assignment))
+}
+
+#' Forest figure of between-arm differences in change
+#'
+#' @description
+#' Forest figure of the location-specific two-sample differences and the mixed-model overall
+#' difference in change, with 95% intervals, for a set of location change analyses. Each
+#' entry carries a return_fit = TRUE result of closed_location_change_analysis, so the
+#' figure is built from the same fits as the tables it summarizes. A vertical line marks no
+#' difference. The caption belongs to the calling report via VisualizationTools::figure();
+#' the assignment mode of the fits is drawn beneath the plot.
+#'
+#' @param analyses list of entries, each a list with number (the analysis's table number),
+#' label (its display name) and result (its return_fit = TRUE result of
+#' closed_location_change_analysis)
+#'
+#' @return An HTML img tag with the figure embedded as a data URI, or invisible NULL when
+#' analyses is empty.
+#' @export
+#'
+#' @examples
+#' fit <- closed_location_change_analysis("Replace with Analytic Tibble", blinded = TRUE, return_fit = TRUE)
+#' closed_effect_forest(list(list(number = "4", label = "Skin firmness", result = fit)))
+closed_effect_forest <- function(analyses) {
+  if (length(analyses) == 0) return(invisible(NULL))
+  fr <- bind_rows(lapply(analyses, function(a) {
+    facet <- sprintf("%s   (%s)", a$label, a$number)
+    bind_rows(a$result$contrasts %>% transmute(facet = facet, label = paste0(position, " (t-test)"), estimate, lower, upper),
+              a$result$model %>% transmute(facet = facet, label = "Overall (mixed model)", estimate, lower, upper))
+  })) %>% filter(!is.na(estimate))
+  fr$label <- factor(fr$label, levels = rev(unique(fr$label)))
+  fr$facet <- factor(fr$facet, levels = unique(fr$facet))
+  captions <- unique(vapply(analyses, function(a) a$result$assignment$caption, character(1)))
+  p <- ggplot2::ggplot(fr, ggplot2::aes(x = estimate, y = label)) +
+    ggplot2::geom_vline(xintercept = 0, color = "#8A93A0", linewidth = 0.4) +
+    ggplot2::geom_segment(ggplot2::aes(x = lower, xend = upper, yend = label), color = "#17365D", linewidth = 1) +
+    ggplot2::geom_point(color = "#17365D", size = 2.2) +
+    ggplot2::facet_wrap(~ facet, scales = "free_x", ncol = 1) +
+    ggplot2::labs(x = paste0("Difference in change, ", analyses[[1]]$result$assignment$contrast, " (95% CI)"), y = NULL,
+                  caption = paste(captions, collapse = "; ")) +
+    ggplot2::theme_minimal(base_size = 12)
+  ggplot_img_tag(p, 8, 1.5 + 0.45 * nrow(fr), "Forest plot of between-arm differences in change")
 }

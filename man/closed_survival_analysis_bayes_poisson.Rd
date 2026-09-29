@@ -10,11 +10,12 @@ closed_survival_analysis_bayes_poisson(
   days_construct,
   outcome_length = 365,
   minimum_days = 0,
+  entry_construct = NULL,
   cuts = c(0, 90, 180, 270, 365),
   ni_margin = 0.1,
   control_arm = "Group A",
-  baseline_prior_mean = -8.15,
-  baseline_prior_sd = 1.5,
+  baseline_prior_mean = -8.24,
+  baseline_prior_sd = 0.75,
   treatment_prior_sd = 1,
   arm_labels = c(`0` = "Control", `1` = "Treatment"),
   outcome_label = "Outcome",
@@ -25,8 +26,9 @@ closed_survival_analysis_bayes_poisson(
   seed = 20260713,
   adapt_delta = 0.95,
   backend = "cmdstanr",
-  install_cmdstan = TRUE,
-  blinded = FALSE
+  blinded = FALSE,
+  show_ni_decision = TRUE,
+  return_fit = FALSE
 )
 }
 \arguments{
@@ -38,7 +40,9 @@ closed_survival_analysis_bayes_poisson(
 
 \item{outcome_length}{number of days for this outcome (defaults to 365)}
 
-\item{minimum_days}{participants whose follow-up is at or below this many days are dropped before the interval split (defaults to 0). A participant with no follow-up time enters no interval, so the default drops only those. Raising it also drops any event that occurred at or before the threshold.}
+\item{minimum_days}{participants whose follow-up is at or below this many days are dropped before the interval split (defaults to 0). A participant with no follow-up time enters no interval, so the default drops only those. Raising it also drops any event that occurred at or before the threshold, and applies delayed entry: follow-up before minimum_days contributes no person-time, interval boundaries at or below it are dropped, and the baseline hazard (and the risk it integrates to) starts at minimum_days. Ignored when entry_construct is supplied.}
+
+\item{entry_construct}{optional name of a column holding each participant's risk-entry DAY on the analysis time scale (e.g. definitive-fixation day 90 expressed on the Time Zero clock). When supplied, entry is participant-specific and the entry day itself is inclusive: risk begins at the start of that day, so an event on the entry day has nonzero exposure. Participants with a qualifying event before their entry day are excluded from the risk set (the event ends primary follow-up), as are participants censored before entry. The first hazard interval runs from each participant's entry to the first value of cuts and so has participant-specific width; cuts must then be the fixed interval stop points ONLY (e.g. c(180, 270, 365)), strictly increasing, ending at outcome_length, with every value greater than every entry day. Posterior risks are standardized over the participant-specific risk-window widths, averaged across all risk-set participants.}
 
 \item{cuts}{interval boundaries for the piecewise baseline hazard; must start at 0 and end at outcome_length.
 These should be selected and locked before unmasking (defaults to quarterly intervals c(0, 90, 180, 270, 365))}
@@ -47,9 +51,9 @@ These should be selected and locked before unmasking (defaults to quarterly inte
 
 \item{control_arm}{value of treatment_arm treated as the control group (defaults to "Group A")}
 
-\item{baseline_prior_mean}{prior mean for each log baseline-hazard interval coefficient (defaults to -8.15, near a 10 percent annual event risk)}
+\item{baseline_prior_mean}{prior mean for each log baseline-hazard interval coefficient (defaults to -8.24, the SAP's prospectively calibrated center anchored to the 8.25 percent planning risk)}
 
-\item{baseline_prior_sd}{prior standard deviation for each interval coefficient (defaults to 1.5, intentionally broad)}
+\item{baseline_prior_sd}{prior standard deviation for each interval coefficient (defaults to 0.75, per the SAP)}
 
 \item{treatment_prior_sd}{prior standard deviation for the treatment log hazard ratio, centered at no effect (defaults to 1)}
 
@@ -71,13 +75,21 @@ These should be selected and locked before unmasking (defaults to quarterly inte
 
 \item{backend}{brms backend, "cmdstanr" or "rstan" (defaults to "cmdstanr")}
 
-\item{install_cmdstan}{when TRUE and backend = "cmdstanr", installs CmdStan version 2.35.0
-into the working directory (quietly, overwriting any existing installation) before fitting.
-Set to FALSE to reuse an existing CmdStan installation (defaults to TRUE)}
-
 \item{blinded}{when TRUE, ignores the real treatment_arm and deterministically reassigns
 arms from the digit sum of study_id (even = "Group A", odd = "Group B") so the table can be
 produced without unmasking (defaults to FALSE)}
+
+\item{show_ni_decision}{when TRUE (the default), the result table carries the
+Noninferior Yes/No verdict column. Set FALSE for supportive, sensitivity,
+and subgroup tables: the noninferiority decision applies only to the
+primary analysis, so those tables keep Pr(Difference < margin) but drop
+the verdict cell. Display-only: the model, the diagnostic gate, and the
+returned posterior (including \code{noninferior}) are unchanged.}
+
+\item{return_fit}{when TRUE, return a list carrying the fitted brms object, the
+person- and interval-level data the model saw, the transformed posterior draws,
+sampler diagnostics, and all settings, alongside the result table (as
+\code{result_table}). Defaults to FALSE, returning only the HTML table.}
 }
 \value{
 An HTML table.
@@ -90,7 +102,7 @@ outcome_length days. Hazards are converted to proportions, and the group differe
 percent credible interval is used to apply a noninferiority decision rule.
 
 Requires the brms package (and the cmdstanr package when backend = "cmdstanr"; by default
-CmdStan itself is installed into the working directory before fitting via install_cmdstan).
+CmdStan must already be installed and configured; the function never installs it).
 All installation, compilation, and sampling output is suppressed; the only output is the
 returned HTML table.
 }

@@ -4,18 +4,48 @@
 \alias{participants_w_complications}
 \title{Participants with complications}
 \usage{
-participants_w_complications(analytic)
+participants_w_complications(
+  analytic,
+  categories = complication_categories(),
+  count_construct = "complication_count",
+  exposure_construct = "last_followup_days",
+  phase = c("all", "set_1", "set_2"),
+  rows = NULL
+)
 }
 \arguments{
-\item{analytic}{analytic data set that must include study_id, complication_data}
+\item{analytic}{analytic data set that must include study_id, enrolled, complication_data,
+sae_data, followup_data and the count and exposure constructs}
+
+\item{categories}{mapping from complication_categories()}
+
+\item{count_construct}{verified total event count per participant for the phase (several
+constructs are summed per participant), or NULL to count the packed records (not de-duplicated)}
+
+\item{exposure_construct}{verified person-days of follow-up per participant for the phase;
+several constructs are summed per participant, a missing one adding zero, so
+c("last_followup_days", "last_followup_days_set_2") gives the whole-study exposure}
+
+\item{phase}{"all", "set_1" or "set_2"}
+
+\item{rows}{optional category keys to show (any, minor_expected, minor_unexpected, serious,
+other, sae_any, sae_related); NULL shows all}
 }
 \value{
-html table
+An HTML table.
 }
 \description{
-Returns statistics of the presence of one or more complication across the participants of the study.
-Notably, this is numerically different from counting across complications themselves, as one participant
-can have multiple complications
+Participants with one or more events in each safety category from
+complication_categories(): category, participants with events, denominator with known
+ascertainment, percent and the number with unknown ascertainment. Counting participants
+is numerically different from counting complications, since one participant can have
+several. The first row (any complication) uses the verified count construct together with
+the packed records; all-SAE coverage is shown separately from the narrower related SAE row.
+phase restricts the records to one course: "set_1" is the randomized phase (events whose
+redcap_event_name has no set2_ prefix), "set_2" the second course after the blinded control
+period; "all" keeps every record. A phase-specific run needs a count construct verified for
+that course, or count_construct = NULL to count the packed records, and an exposure construct
+measured over the same phase. SAE-form records carry no course and are counted in every phase.
 }
 \examples{
 participants_w_complications("Replace with Analytic Tibble")

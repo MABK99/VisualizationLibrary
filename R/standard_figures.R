@@ -1885,7 +1885,9 @@ consort_diagram_wb_publication <- function(analytic){
 #' constraint_48hrs, constraint_admin, constraint_noconsent, constraint_other,
 #' nonparticipation_other_study_coenrolled, nonparticipation_other_reason, randomized,
 #' adjudicated_inappropriate_enrollment, adjudicated_late_ineligible, adjudicated_late_refusal,
-#' adjudicated_physician_withdrawn, df_surg_start_date, surgery_or_healed_type, surgery_or_healed_days, crossover
+#' adjudicated_physician_withdrawn, df_surg_start_date, surgery_or_healed_type, surgery_or_healed_days, crossover,
+#' dead, withdrawn_consent, not_completed_reason, bpi_severity_score_3mo, bpi_interference_score_3mo,
+#' opioid_days_baseline, opioid_days_3mo, opioid_days_6mo, opioid_days_12mo
 #' @param outcome_day day at which the primary outcome status is assessed, defaults to 365
 #'
 #' @return An HTML string containing an image tag with the base64-encoded consort diagram in PNG format.
@@ -1903,13 +1905,21 @@ consort_diagram_nsaid_publication <- function(analytic, outcome_day=365){
                            "constraint_other", "nonparticipation_other_study_coenrolled", "nonparticipation_other_reason",
                            "randomized", "adjudicated_inappropriate_enrollment", "adjudicated_late_ineligible",
                            "adjudicated_late_refusal", "adjudicated_physician_withdrawn", "df_surg_start_date",
-                           "surgery_or_healed_type", "surgery_or_healed_days", "crossover"),
+                           "surgery_or_healed_type", "surgery_or_healed_days", "crossover", "adherent",
+                           "primary_entry_day",
+                           "dead", "withdrawn_consent", "not_completed_reason",
+                           "bpi_severity_score_3mo", "bpi_interference_score_3mo",
+                           "opioid_days_baseline", "opioid_days_3mo", "opioid_days_6mo", "opioid_days_12mo"),
     example_types = c("Boolean", "Boolean", "Category-NS", "Boolean", "Boolean",
                       "Boolean", "Boolean", "Boolean", "Boolean",
                       "Boolean", "Boolean", "Boolean",
                       "Boolean", "Boolean", "Boolean",
                       "Boolean", "Boolean", "Date",
-                      "NamedCategory['check' 'favorable_event' 'unfavorable_event']", "Number-U365", "Boolean"))
+                      "NamedCategory['check' 'favorable_event' 'unfavorable_event']", "Number-U365", "Boolean", "Boolean",
+                      "Number",
+                      "Boolean", "Boolean", "NamedCategory['Unreachable' 'Other']",
+                      "Number", "Number",
+                      "Number", "Number", "Number", "Number"))
 
   df <- analytic %>%
     select(study_id, screened, eligible, ineligibility_reasons, refused, not_consented, consented,
@@ -1917,7 +1927,11 @@ consort_diagram_nsaid_publication <- function(analytic, outcome_day=365){
            nonparticipation_other_study_coenrolled, nonparticipation_other_reason,
            randomized, adjudicated_inappropriate_enrollment, adjudicated_late_ineligible,
            adjudicated_late_refusal, adjudicated_physician_withdrawn, df_surg_start_date,
-           surgery_or_healed_type, surgery_or_healed_days, crossover) %>%
+           surgery_or_healed_type, surgery_or_healed_days, crossover, any_of("adherent"),
+           primary_entry_day,
+           dead, withdrawn_consent, not_completed_reason,
+           bpi_severity_score_3mo, bpi_interference_score_3mo,
+           opioid_days_baseline, opioid_days_3mo, opioid_days_6mo, opioid_days_12mo) %>%
     filter(screened)
 
   ir_count <- df %>%
@@ -2013,17 +2027,70 @@ consort_diagram_nsaid_publication <- function(analytic, outcome_day=365){
   adjudicated_healed <- sum(itt_df$surgery_or_healed_type %in% 'favorable_event')
   unfavorable_event <- sum(itt_df$surgery_or_healed_type %in% 'unfavorable_event')
   unknown_outcome <- itt - known_outcome - unfavorable_event
-  non_adherent <- sum(itt_df$crossover, na.rm = TRUE)
-  per_protocol <- itt - non_adherent
+  # Revised SAP: the adherer per-protocol set is adherent participants; crossover
+  # (opposite-arm adherence) is a distinct state shown on its own line. Falls back
+  # to the crossover column as a non-adherence proxy until the regenerated dataset
+  # carries the adherent construct.
+  if ("adherent" %in% names(itt_df)) {
+    per_protocol <- sum(itt_df$adherent %in% TRUE)
+    non_adherent <- itt - per_protocol
+  } else {
+    non_adherent <- sum(itt_df$crossover, na.rm = TRUE)
+    per_protocol <- itt - non_adherent
+  }
+  crossover_n <- sum(itt_df$crossover %in% TRUE)
+
+  # Amended SAP section 3 elements. Risk-set entry and person-time are computed
+  # over the intention-to-treat set, since they describe the primary analysis;
+  # the day-180/365 statuses and the dispositions also run on the
+  # intention-to-treat set: per the study PI (8/28), the CONSORT separates
+  # pathways, so participants branched out in the adjudication-exclusions box
+  # must not re-enter downstream boxes. Days are counted from Time Zero; the SAP phrases the
+  # status days as following discharge, and that difference is recorded in
+  # SAP_Issues_and_Questions.md for confirmation.
+  # Participant-specific primary risk entry, revised SAP: fixation day 90 on the
+  # Time Zero scale, inclusive (risk begins at the start of the entry day). A
+  # missing entry falls back to day 90. An event before entry ends primary
+  # follow-up and never enters the risk set.
+  itt_days <- surgery_or_healed_days_num
+  entry_num <- suppressWarnings(as.numeric(itt_df$primary_entry_day))
+  entry_num <- ifelse(is.na(entry_num), 90, entry_num)
+  entry_boundary <- entry_num - 1
+  itt_event <- itt_df$surgery_or_healed_type %in% 'unfavorable_event'
+  in_risk <- !is.na(itt_days) & itt_days > entry_boundary & !(itt_event & itt_days < entry_num)
+  risk_set_n <- sum(in_risk)
+  person_days <- sum(pmax(0, pmin(itt_days[in_risk], 365) - entry_boundary[in_risk]), na.rm = TRUE)
+
+  status_at <- function(d) {
+    event_by <- itt_df$surgery_or_healed_type %in% 'unfavorable_event' & !is.na(itt_days) & itt_days <= d
+    free_through <- !event_by & !is.na(itt_days) & itt_days >= d
+    c(event = sum(event_by), free = sum(free_through),
+      unknown = nrow(itt_df) - sum(event_by) - sum(free_through))
+  }
+  s180 <- status_at(180)
+  s365 <- status_at(365)
+
+  deaths_n <- sum(itt_df$dead %in% TRUE)
+  withdrew_n <- sum(itt_df$withdrawn_consent %in% TRUE)
+  ltfu_n <- sum(itt_df$not_completed_reason %in% 'Unreachable')
+
+  bpi_sev_n <- sum(!is.na(suppressWarnings(as.numeric(itt_df$bpi_severity_score_3mo))))
+  bpi_int_n <- sum(!is.na(suppressWarnings(as.numeric(itt_df$bpi_interference_score_3mo))))
+  opioid_n <- sum(!is.na(suppressWarnings(as.numeric(itt_df$opioid_days_baseline))) |
+                    !is.na(suppressWarnings(as.numeric(itt_df$opioid_days_3mo))) |
+                    !is.na(suppressWarnings(as.numeric(itt_df$opioid_days_6mo))) |
+                    !is.na(suppressWarnings(as.numeric(itt_df$opioid_days_12mo))))
 
   consort_diagram <- grViz(paste0('
     digraph g {
-      graph [layout=fdp, overlap = true, fontsize=1, splines=polyline]
+      graph [layout=fdp, overlap = true, fontsize=1, splines=polyline, bgcolor="white"]
+      node [fontname="Helvetica", fontsize=12, margin="0.14,0.08"]
+      edge [color="#5B6B7C", penwidth=1.1, arrowsize=0.7]
 
-      title [style="filled", fillcolor="white", color="black", pos="2,7.2!", shape = box, width=2.4, height=.5,
+      title [style="rounded,filled", fillcolor="#DDE9F5", color="#2E5F8A", penwidth=1.5, pos="2,7.2!", shape = box, width=2.4, height=.5,
         label = "', screened, ' Patients were assessed for eligibility"];
 
-      box1 [style="filled", fillcolor="white", color="black", pos="5.4,3.8!", shape = box, width=2.4, height=.5,
+      box1 [style="rounded,filled", fillcolor="#EEF1F5", color="#8A93A0", penwidth=1.2, pos="5.4,3.8!", shape = box, width=2.4, height=.5,
       labeljust=l,
       label = <
         <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
@@ -2045,10 +2112,10 @@ consort_diagram_nsaid_publication <- function(analytic, outcome_day=365){
         </TABLE>
       >];
 
-      title2 [style="filled", fillcolor="white", color="black", pos="2,0.4!", shape = box, width=2.4, height=.5,
+      title2 [style="rounded,filled", fillcolor="#DDE9F5", color="#2E5F8A", penwidth=1.5, pos="2,0.4!", shape = box, width=2.4, height=.5,
         label = "', randomized, ' Underwent randomization"];
 
-      box2 [style="filled", fillcolor="white", color="black", pos="2,-1.3!", shape = box, width=2.4, height=.5, labeljust=l,
+      box2 [style="rounded,filled", fillcolor="#DDE9F5", color="#2E5F8A", penwidth=1.5, pos="2,-1.3!", shape = box, width=2.4, height=.5, labeljust=l,
         label = <
           <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
             <TR><TD ALIGN="LEFT">', inappropriately_enrolled, ' Were determined to be inappropriately</TD></TR>
@@ -2063,10 +2130,10 @@ consort_diagram_nsaid_publication <- function(analytic, outcome_day=365){
           </TABLE>
         >];
 
-      box3 [style="filled", fillcolor="white", color="black", pos="2,-3.1!", shape = box, width=2.4, height=.5,
+      box3 [style="rounded,filled", fillcolor="#DDE9F5", color="#2E5F8A", penwidth=1.5, pos="2,-3.1!", shape = box, width=2.4, height=.5,
         label = "', itt, ' Were included in the intention-to-treat analysis"];
 
-      box4 [style="filled", fillcolor="white", color="black", pos="2,-4.9!", shape = box, width=2.4, height=.5, labeljust=l,
+      box4 [style="rounded,filled", fillcolor="#E3F1E7", color="#2E7D4F", penwidth=1.5, pos="2,-4.9!", shape = box, width=2.4, height=.5, labeljust=l,
         label = <
           <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
             <TR><TD ALIGN="LEFT">', known_outcome, ' Had ', outcome_day, ' days of follow-up without</TD></TR>
@@ -2081,15 +2148,64 @@ consort_diagram_nsaid_publication <- function(analytic, outcome_day=365){
           </TABLE>
         >];
 
-      box5 [style="filled", fillcolor="white", color="black", pos="2,-7.1!", shape = box, width=2.4, height=.5, labeljust=l,
+      box5 [style="rounded,filled", fillcolor="#E3F1E7", color="#2E7D4F", penwidth=1.5, pos="2,-7.1!", shape = box, width=2.4, height=.5, labeljust=l,
         label = <
           <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
             <TR><TD ALIGN="LEFT">', per_protocol, ' Were included in the per-protocol</TD></TR>
             <TR><TD ALIGN="LEFT">analysis</TD></TR>
             <TR><TD ALIGN="LEFT">', non_adherent, ' Were excluded from the per-protocol</TD></TR>
             <TR><TD ALIGN="LEFT">analysis due to non-adherence</TD></TR>
+            <TR><TD ALIGN="LEFT">', crossover_n, ' Met the opposite arm&#39;s adherence</TD></TR>
+            <TR><TD ALIGN="LEFT">criteria (crossover, revised definition)</TD></TR>
           </TABLE>
         >]
+
+      sap_accounting [style="rounded,filled", fillcolor="#FAF3DF", color="#B08A2E", penwidth=1.2, pos="6.2,-3.1!", shape = box, width=2.6, height=.5, labeljust=l,
+        label = <
+          <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
+            <TR><TD ALIGN="LEFT">Primary analysis accounting</TD></TR>
+            <TR><TD ALIGN="LEFT">', risk_set_n, ' Entered the participant-specific primary risk set</TD></TR>
+            <TR><TD ALIGN="LEFT">', format(person_days, big.mark = ","), ' Primary likelihood person-days</TD></TR>
+            <TR><TD ALIGN="LEFT">contributed in the primary window</TD></TR>
+          </TABLE>
+        >];
+
+      sap_status [style="rounded,filled", fillcolor="#FAF3DF", color="#B08A2E", penwidth=1.2, pos="6.2,-5.4!", shape = box, width=2.6, height=.5, labeljust=l,
+        label = <
+          <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
+            <TR><TD ALIGN="LEFT">Status of randomized participants</TD></TR>
+            <TR><TD ALIGN="LEFT">At day 180:</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', s180['event'], ' Had a surgery to promote union</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', s180['free'], ' Known event-free through day 180</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', s180['unknown'], ' Status unknown at day 180</TD></TR>
+            <TR><TD ALIGN="LEFT">At day 365:</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', s365['event'], ' Had a surgery to promote union</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', s365['free'], ' Known event-free through day 365</TD></TR>
+            <TR><TD ALIGN="LEFT">&#8203;    ', s365['unknown'], ' Status unknown at day 365</TD></TR>
+          </TABLE>
+        >];
+
+      sap_disp [style="rounded,filled", fillcolor="#FAF3DF", color="#B08A2E", penwidth=1.2, pos="6.2,-7.6!", shape = box, width=2.6, height=.5, labeljust=l,
+        label = <
+          <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
+            <TR><TD ALIGN="LEFT">Dispositions (intention-to-treat)</TD></TR>
+            <TR><TD ALIGN="LEFT">', deaths_n, ' Died</TD></TR>
+            <TR><TD ALIGN="LEFT">', withdrew_n, ' Withdrew consent</TD></TR>
+            <TR><TD ALIGN="LEFT">', ltfu_n, ' Lost to follow-up</TD></TR>
+            <TR><TD ALIGN="LEFT">Physician withdrawals appear in the</TD></TR>
+            <TR><TD ALIGN="LEFT">adjudication box above</TD></TR>
+          </TABLE>
+        >];
+
+      sap_secondary [style="rounded,filled", fillcolor="#FAF3DF", color="#B08A2E", penwidth=1.2, pos="6.2,-9.3!", shape = box, width=2.6, height=.5, labeljust=l,
+        label = <
+          <TABLE BORDER="0" CELLBORDER="0" CELLPADDING="0">
+            <TR><TD ALIGN="LEFT">Included in secondary-outcome analyses</TD></TR>
+            <TR><TD ALIGN="LEFT">', bpi_sev_n, ' Day-90 BPI pain intensity</TD></TR>
+            <TR><TD ALIGN="LEFT">', bpi_int_n, ' Day-90 BPI pain interference</TD></TR>
+            <TR><TD ALIGN="LEFT">', opioid_n, ' Reported opioid use at any timepoint</TD></TR>
+          </TABLE>
+        >];
 
       midpoint [style=invis, pos="2,3.8!", width=0, height=0, fixedsize=true]
 
@@ -2101,6 +2217,10 @@ consort_diagram_nsaid_publication <- function(analytic, outcome_day=365){
       box2 -> box3
       box3 -> box4
       box4 -> box5
+      box3 -> sap_accounting [style=dashed, arrowhead=none]
+      box4 -> sap_status [style=dashed, arrowhead=none]
+      sap_status -> sap_disp [style=dashed, arrowhead=none]
+      sap_disp -> sap_secondary [style=dashed, arrowhead=none]
     }
   '))
   svg_content <- DiagrammeRsvg::export_svg(consort_diagram)
@@ -2793,3 +2913,81 @@ adherence_by_id <- function(analytic, random_sample = NULL, facilitycodes = NULL
 }
 
 
+
+
+#' Embed a ggplot as a base64 PNG image tag
+#' @noRd
+ggplot_img_tag <- function(plot, width, height, alt) {
+  fig_path <- tempfile(fileext = ".png")
+  ggplot2::ggsave(fig_path, plot, width = width, height = height, dpi = 150, bg = "white", limitsize = FALSE)
+  tag <- sprintf('<img src="data:image/png;base64,%s" style="max-width:100%%" alt="%s"/>',
+                 base64enc::base64encode(fig_path), alt)
+  file.remove(fig_path)
+  tag
+}
+
+#' Long visit values for a trajectory figure
+#' @noRd
+trajectory_data <- function(analytic, readings_construct, fields, value_field, score_family, score_families,
+                            promis_construct = "promis_data") {
+  event_levels <- c("injection_1", "injection_2", "2_week", "1_month", "2_month", "3_month")
+  if (!is.null(score_family)) {
+    d <- unpack_score_families(analytic, score_families, promis_construct = promis_construct) %>%
+      filter(instrument == !!score_family, !is.na(score)) %>%
+      transmute(study_id, set = "score", visit = as.character(visit), value = score, position = as.character(instrument))
+    list(data = d, ylab = paste0(score_family, " score"))
+  } else {
+    d <- measurement_visit_means(unpack_measurement_readings(analytic, readings_construct, fields, value_field)) %>%
+      filter(available) %>%
+      transmute(study_id, set, visit = factor(event, levels = unique(c(event_levels, event))), value = mean, position)
+    list(data = d, ylab = paste0("Location mean ", value_field))
+  }
+}
+
+#' Draw participant trajectories
+#' @noRd
+trajectory_plot <- function(d, ylab, caption) {
+  p <- ggplot2::ggplot(d, ggplot2::aes(x = visit, y = value, group = study_id, color = treatment_arm)) +
+    ggplot2::geom_line(alpha = 0.6) + ggplot2::geom_point(size = 1.4) +
+    ggplot2::facet_grid(set ~ position) +
+    ggplot2::labs(x = "Visit", y = ylab, color = NULL, caption = caption) +
+    ggplot2::theme_minimal(base_size = 11) +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1), legend.position = "bottom")
+  ggplot_img_tag(p, 10, 3 + 2.2 * n_distinct(d$set), "Participant trajectories by visit")
+}
+
+#' Participant Trajectory Figure
+#'
+#' @description
+#' Pooled participant values by visit from a packed measurement construct (one facet per
+#' location and set) or from a score family, drawn from the same long tables as the
+#' descriptive tables. Visits and sets are distinguished by facets. No treatment assignment
+#' is used; see closed_trajectory_figure for the by-arm version.
+#'
+#' @param analytic analytic data set that must include study_id, enrolled and either the
+#' readings construct or the score constructs
+#' @param readings_construct packed measurement construct (ignored when score_family is set)
+#' @param fields packed field names, including set, event and position
+#' @param value_field the packed field holding the measurement
+#' @param score_family optional name of a score family (or PROMIS-29 domain label) to plot instead
+#' @param score_families named list from default_score_families
+#' @param promis_construct packed PROMIS-29 construct whose domains can be named in score_family; NULL to omit
+#'
+#' @return An HTML img tag with the figure embedded as a data URI.
+#' @export
+#'
+#' @examples
+#' trajectory_figure("Replace with Analytic Tibble")
+#' trajectory_figure("Replace with Analytic Tibble", score_family = "DLQI")
+trajectory_figure <- function(analytic, readings_construct = "durometer_readings_set_1",
+                              fields = c("set", "event", "position", "injection", "reading"), value_field = "reading",
+                              score_family = NULL, score_families = default_score_families(),
+                              promis_construct = "promis_data") {
+  analytic <- if_needed_generate_example_data(
+    analytic, example_constructs = c("enrolled", readings_construct, unlist(score_families, use.names = FALSE), promis_construct),
+    example_types = c("Boolean", measurement_example_type(fields, value_field), rep("Number", length(unlist(score_families))),
+                      if (!is.null(promis_construct)) promis_data_example_type))
+  td <- trajectory_data(analytic, readings_construct, fields, value_field, score_family, score_families, promis_construct)
+  d <- td$data %>% mutate(treatment_arm = "All participants")
+  trajectory_plot(d, td$ylab, "Open display: pooled participants, no treatment assignment used")
+}

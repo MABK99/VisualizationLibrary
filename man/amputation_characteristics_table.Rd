@@ -4,22 +4,56 @@
 \alias{amputation_characteristics_table}
 \title{Amputation, Residual Limb and Prostheses Characteristics Summary Table}
 \usage{
-amputation_characteristics_table(analytic)
+amputation_characteristics_table(
+  analytic,
+  anchor = c("first_injection", "consent"),
+  display_years = TRUE,
+  regular_levels = regular_use_levels,
+  days_since_first_injection = "amputation_days_since",
+  days_since_consent = "amputation_days",
+  cause = "amputation_cause",
+  side = "amputation_side",
+  days_per_week = "prosthesis_days_per_week",
+  hours_per_day = "prosthesis_hours_per_day",
+  devices = "ambulatory_device_list",
+  ulcer_stage = "ulcer_stage",
+  prosthesis_type = "prosthesis_type",
+  comfort_sit = "socket_comfort_score_sit",
+  comfort_stand = "socket_comfort_score_stand",
+  comfort_walk = "socket_comfort_score_walk",
+  medications = "medication_frequency_list",
+  skin_treatments = "meds_skin_list",
+  medication_slots = 6,
+  skin_treatment_slots = 5
+)
 }
 \arguments{
-\item{analytic}{This is the analytic data set that must include: enrolled, 
-amputation_days_since, prosthesis_days_per_week, prosthesis_hours_per_day, 
-socket_comfort_score_sit, socket_comfort_score_stand, socket_comfort_score_walk, 
-amputation_cause, ambulatory_device_list, medication_frequency_list, and meds_skin_list.}
+\item{analytic}{analytic data set that must include enrolled and the constructs named by
+the other arguments}
+
+\item{anchor}{"first_injection" (uses days_since_first_injection) or "consent" (uses
+days_since_consent)}
+
+\item{display_years}{show years (days / 365.25) rather than days}
+
+\item{regular_levels}{frequency labels counted as regular use}
+
+\item{days_since_first_injection, days_since_consent, cause, side, days_per_week, hours_per_day, devices, ulcer_stage, prosthesis_type, comfort_sit, comfort_stand, comfort_walk, medications, skin_treatments}{construct names; NULL omits the side, ulcer stage or prosthesis type row}
+
+\item{medication_slots, skin_treatment_slots}{number of packed slots in the frequency lists}
 }
 \value{
-An HTML table styled with kableExtra.
+An HTML table.
 }
 \description{
-Visualizes the characteristics of enrolled subjects including years since amputation, 
-cause, prosthesis use, ambulatory devices, socket comfort scores, and treatments.
+Pooled amputation and prosthesis characteristics for enrolled participants: time since
+amputation at one labelled anchor (first injection or consent), cause, side, prosthesis
+use, ambulatory devices split into individual selections, ulcer stage and prosthesis type,
+socket comfort, and regular pain-medication and skin-treatment use. Regular
+use applies the daily-or-weekly threshold in regular_levels rather than any answer other
+than "Did not use", and parses the packed frequency lists by their slot count (six for
+medications including cannabinoids, five for skin treatments).
 }
 \examples{
-\dontrun{
-}
+amputation_characteristics_table("Replace with Analytic Tibble")
 }
