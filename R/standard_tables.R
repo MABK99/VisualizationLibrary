@@ -7750,8 +7750,6 @@ unpack_clinical_events <- function(analytic){
     filter(!is.na(complication_category_mapped)))
 }
 
-
-
 #' Race-Ethnicity-Gender Tally's for Enrolled and Consented Participants
 #'
 #' @description 
@@ -7791,8 +7789,8 @@ constented_enrolled_reg_tally <- function(analytic, last_review_dt, initial_appr
   concerned_analytic <- analytic %>%
     select(study_id, all_of(field_columns)) %>%
     mutate(across(c(race, ethnicity, sex, enrolled_date, consented_date),
-             ~ na_if(trimws(as.character(.x)), "")),
-      across(c(enrolled, consented), as.logical))
+                  ~ na_if(trimws(as.character(.x)), "")),
+           across(c(enrolled, consented), as.logical))
   
   #reformat the dates so they are comparable
   date_format <- "%Y-%m-%d"
@@ -8001,6 +7999,8 @@ constented_enrolled_reg_tally <- function(analytic, last_review_dt, initial_appr
   
   return(tally_table)
 }
+
+
 
 
 
